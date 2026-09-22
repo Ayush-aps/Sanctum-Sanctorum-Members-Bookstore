@@ -93,14 +93,64 @@ def list_books(
                 ))
     if restricted is not None:
         query = query.where(Book.restricted == restricted)
-        
+
     # TODO: min_price / max_price filters
-    # Inclusive maximum price.
+    # Inclusive minimum price.
     if min_price is not None:
         query = query.where(Book.price_cents >= min_price)
 
+    # Inclusive maximum price.
+    if max_price is not None:
+        query = query.where(Book.price_cents <= max_price)
+
+    # Count all matching books BEFORE limit/offset.
+    total = db.scalar(
+        select(func.count()).select_from(query.subquery())
+    ) or 0
+
     # TODO: apply ``sort``
-    books = db.scalars(query.order_by(Book.id.asc()).limit(limit).offset(offset)).all()
-    total = len(books)
+
+    if sort is None:
+        ordered_query = query.order_by(Book.id.asc())
+    else:
+        sort_value = sort.value if hasattr(sort, "value") else str(sort)
+
+        if sort_value == "title":
+            ordered_query = query.order_by(
+                Book.title.asc(),
+                Book.id.asc(),
+            )
+        elif sort_value == "-title":
+            ordered_query = query.order_by(
+                Book.title.desc(),
+                Book.id.asc(),
+            )
+        elif sort_value == "price":
+            ordered_query = query.order_by(
+                Book.price_cents.asc(),
+                Book.id.asc(),
+            )
+        elif sort_value == "-price":
+            ordered_query = query.order_by(
+                Book.price_cents.desc(),
+                Book.id.asc(),
+            )
+        else:
+            # This should normally never be reached because BookSort
+            # validation is handled by FastAPI/Pydantic.
+            raise HTTPException(
+                status_code=422,
+                detail="Invalid sort value",
+            )
+
+    # Applied pagination only after filtering and counting.
+    books = db.scalars(
+        ordered_query
+        .limit(limit)
+        .offset(offset)
+    ).all()
+
+    #books = db.scalars(query.order_by(Book.id.asc()).limit(limit).offset(offset)).all()
+    #total = len(books)
 
     return BookPage(items=books, total=total, limit=limit, offset=offset)
