@@ -62,7 +62,7 @@ def update_book(db: Session, book_id: int, data: BookUpdate) -> Book:
 
     return book
 
-    # raise NotImplementedError("update_book")
+    # raise NotImplementedError("update_book") -- i excluded it
 
 
 def list_books(
