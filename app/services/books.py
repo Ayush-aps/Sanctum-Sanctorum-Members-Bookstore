@@ -2,7 +2,7 @@
 from typing import Optional
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, or_,select
 from sqlalchemy.orm import Session
 
 from app.models import Book
@@ -15,6 +15,17 @@ def create_book(db: Session, data: BookCreate) -> Book:
     Rules: the (already normalized) ISBN must be unique -> 409 otherwise.
     """
     # TODO: reject a duplicate ISBN with 409
+
+    existing_book = db.scalar(
+        select(Book).where(Book.isbn == data.isbn)
+    )
+
+    if existing_book is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="A book with this ISBN already exists",
+        )
+
     book = Book(**data.model_dump())
     db.add(book)
     db.commit()
@@ -31,8 +42,27 @@ def get_book(db: Session, book_id: int) -> Book:
 
 
 def update_book(db: Session, book_id: int, data: BookUpdate) -> Book:
-    """Apply a partial update. Only fields present in the request are changed; 404 if missing."""
-    raise NotImplementedError("update_book")
+    """Apply a partial update. Only fields present in the request are changed; 404 if missing. ISBN is not patchable and is ignored if supplied. Unknown fields are ignored by the schema."""
+    
+    book = db.get(Book, book_id)
+
+    if book is None:
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    update_data = data.model_dump(exclude_unset=True)
+
+    # ISBN is intentionally not patchable.
+    update_data.pop("isbn", None)
+
+    for field, value in update_data.items():
+        setattr(book, field, value)
+
+    db.commit()
+    db.refresh(book)
+
+    return book
+
+    # raise NotImplementedError("update_book")
 
 
 def list_books(
@@ -56,10 +86,18 @@ def list_books(
     """
     query = select(Book)
     if q:
-        query = query.where(Book.title.icontains(q, autoescape=True))
+        query = query.where(
+            or_(
+                Book.title.icontains(q, autoescape=True),
+                Book.author.icontains(q, autoescape=True),
+                ))
     if restricted is not None:
         query = query.where(Book.restricted == restricted)
+        
     # TODO: min_price / max_price filters
+    # Inclusive maximum price.
+    if min_price is not None:
+        query = query.where(Book.price_cents >= min_price)
 
     # TODO: apply ``sort``
     books = db.scalars(query.order_by(Book.id.asc()).limit(limit).offset(offset)).all()
