@@ -233,23 +233,65 @@ def create_order(db: Session, data: OrderCreate, now: datetime) -> Order:
 
 def get_order(db: Session, order_id: int) -> Order:
     """Return an order by id, or raise 404."""
-    return _load_order(db, order_id)
 
-    # order = db.get(Order, order_id)
-    # if order is None:
-    #    raise HTTPException(status_code=404, detail="Order not found")
-    #return order
+    order = db.get(Order, order_id)
+    if order is None:
+        raise HTTPException(status_code=404, detail="Order not found")
+    return order
 
 
 def pay_order(db: Session, order_id: int) -> Order:
-    """Mark a pending order as paid. 404 if missing; 409 if not pending."""
-    order = get_order(db, order_id)
-    if order.status != OrderStatus.PENDING.value:
-        raise HTTPException(status_code=409, detail=f"Cannot pay an order that is {order.status}")
-    order.status = OrderStatus.PAID.value
-    db.commit()
-    db.refresh(order)
-    return order
+    """Mark a pending order as paid. 404 if missing; 409 if not pending.
+    Missing order -> 404
+    Non-pending order -> 409
+    Reserved stock remains unchanged.
+    """
+
+    try:
+        # Conditional update prevents an already-paid/cancelled order
+        # from being transitioned again.
+        result = db.execute(
+            update(Order)
+            .where(
+                Order.id == order_id,
+                Order.status == OrderStatus.PENDING.value,
+            )
+            .values(
+                status=OrderStatus.PAID.value,
+            )
+        )
+
+        if result.rowcount == 0:
+            existing = db.get(Order, order_id)
+
+            if existing is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail="Order not found",
+                )
+
+            raise HTTPException(
+                status_code=409,
+                detail=f"Cannot pay an order that is {existing.status}",
+            )
+
+        order = _load_order(db, order_id)
+
+        db.commit()
+
+        return order
+
+    except Exception:
+        db.rollback()
+        raise
+
+    # order = get_order(db, order_id)
+    # if order.status != OrderStatus.PENDING.value:
+    #     raise HTTPException(status_code=409, detail=f"Cannot pay an order that is {order.status}")
+    # order.status = OrderStatus.PAID.value
+    # db.commit()
+    # db.refresh(order)
+    # return order
 
 
 def cancel_order(db: Session, order_id: int) -> Order:
