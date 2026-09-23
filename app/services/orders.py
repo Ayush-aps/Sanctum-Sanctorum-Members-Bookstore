@@ -295,11 +295,65 @@ def pay_order(db: Session, order_id: int) -> Order:
 
 
 def cancel_order(db: Session, order_id: int) -> Order:
-    """Cancel a pending order and restore the reserved stock. 404 if missing; 409 if not pending."""
-    order = get_order(db, order_id)
-    if order.status != OrderStatus.PENDING.value:
-        raise HTTPException(status_code=409, detail=f"Cannot cancel an order that is {order.status}")
-    order.status = OrderStatus.CANCELLED.value
-    db.commit()
-    db.refresh(order)
-    return order
+    """Cancel a pending order and restore the reserved stock. 404 if missing; 409 if not pending.
+    Missing order -> 404
+    Non-pending order -> 409
+    Pending order -> cancelled + reserved stock restored.
+    """
+
+    try:
+        # Change the status only if the order is still pending.
+        result = db.execute(
+            update(Order)
+            .where(
+                Order.id == order_id,
+                Order.status == OrderStatus.PENDING.value,
+            )
+            .values(
+                status=OrderStatus.CANCELLED.value,
+            )
+        )
+
+        if result.rowcount == 0:
+            existing = db.get(Order, order_id)
+
+            if existing is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail="Order not found",
+                )
+
+            raise HTTPException(
+                status_code=409,
+                detail=f"Cannot cancel an order that is {existing.status}",
+            )
+
+        # Load the items for restoring the exact reserved quantities.
+        order = _load_order(db, order_id)
+
+        # Restore the reserved stock for every item.
+        for item in order.items:
+            db.execute(
+                update(Book)
+                .where(Book.id == item.book_id)
+                .values(
+                    stock=Book.stock + item.quantity,
+                )
+            )
+
+        db.commit()
+
+        return order
+
+    except Exception:
+        db.rollback()
+        raise
+
+
+    # order = get_order(db, order_id)
+    # if order.status != OrderStatus.PENDING.value:
+    #     raise HTTPException(status_code=409, detail=f"Cannot cancel an order that is {order.status}")
+    # order.status = OrderStatus.CANCELLED.value
+    # db.commit()
+    # db.refresh(order)
+    # return order
