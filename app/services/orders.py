@@ -3,10 +3,12 @@ from datetime import datetime
 from typing import Dict
 
 from fastapi import HTTPException
-from sqlalchemy.orm import Session
+from sqlalchemy import select, update
+from sqlalchemy.orm import Session, selectinload
 
-from app.models import Member, MemberTier, Order, OrderStatus
+from app.models import Book, Member, MemberTier, Order, OrderItem, OrderStatus
 from app.schemas import OrderCreate
+from app.services.members import ensure_can_access_restricted
 
 # Percentage discount granted by each membership tier.
 TIER_DISCOUNT_PERCENT: Dict[str, int] = {
@@ -23,7 +25,50 @@ BULK_DISCOUNT_PERCENT = 5
 
 def calculate_discount_percent(member: Member, total_quantity: int) -> int:
     """Tier discount, plus the bulk discount when total quantity >= threshold."""
-    raise NotImplementedError("calculate_discount_percent")
+
+    tier_discount = TIER_DISCOUNT_PERCENT[member.tier]
+
+    bulk_discount = (
+        BULK_DISCOUNT_PERCENT
+        if total_quantity >= BULK_QUANTITY_THRESHOLD
+        else 0
+    )
+
+    return tier_discount + bulk_discount
+
+    # raise NotImplementedError("calculate_discount_percent")
+
+
+# both below functions are small private helper functions to improve the architecture and avoid duplicated database/query logic.
+def _load_books(db: Session, book_ids: list[int]) -> Dict[int, Book]:
+    """Load all requested books in one query and index them by id."""
+
+    books = db.scalars(
+        select(Book)
+        .where(Book.id.in_(book_ids))
+        .with_for_update()
+    ).all()
+
+    return {book.id: book for book in books}
+
+
+def _load_order(db: Session, order_id: int) -> Order:
+    """Load an order and its items, or raise 404."""
+
+    order = db.scalar(
+        select(Order)
+        .options(selectinload(Order.items))
+        .where(Order.id == order_id)
+    )
+
+    if order is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Order not found",
+        )
+
+    return order
+
 
 
 def create_order(db: Session, data: OrderCreate, now: datetime) -> Order:
