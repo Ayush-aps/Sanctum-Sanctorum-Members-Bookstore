@@ -88,7 +88,147 @@ def create_order(db: Session, data: OrderCreate, now: datetime) -> Order:
     # 4. Decrement stock and build OrderItems with the current price as unit_price_cents.
     # 5. Compute subtotal, discount_percent (calculate_discount_percent), discount_cents, total.
     # 6. Save the pending Order with created_at = now and return it.
-    raise NotImplementedError("create_order")
+
+    """Validation handled by the schema:
+    - items must not be empty
+    - every quantity must be >= 1
+    - a book may appear only once
+    - Stock reservation is all-or-nothing."""
+
+    try:
+        # ------------------------------------------------------------------
+        # 1. Load member
+        # ------------------------------------------------------------------
+        member = db.get(Member, data.member_id)
+
+        if member is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Member not found",
+            )
+
+        # ------------------------------------------------------------------
+        # 2. Load every requested book in one query
+        # ------------------------------------------------------------------
+        book_ids = [item.book_id for item in data.items]
+        books_by_id = _load_books(db, book_ids)
+
+        # Check missing books before any restricted/stock checks.
+        for book_id in book_ids:
+            if book_id not in books_by_id:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Book {book_id} not found",
+                )
+
+        # ------------------------------------------------------------------
+        # 3. Restricted-book access check
+        # ------------------------------------------------------------------
+        if any(book.restricted for book in books_by_id.values()):
+            ensure_can_access_restricted(member)
+
+        # ------------------------------------------------------------------
+        # 4. Check stock for every item BEFORE changing anything
+        # ------------------------------------------------------------------
+        for item in data.items:
+            book = books_by_id[item.book_id]
+
+            if book.stock < item.quantity:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Insufficient stock for book {book.id}",
+                )
+
+        # ------------------------------------------------------------------
+        # 5. Reserve stock atomically and calculate pricing
+        # ------------------------------------------------------------------
+        subtotal_cents = 0
+        total_quantity = 0
+
+        for item in data.items:
+            book = books_by_id[item.book_id]
+
+            # Atomic stock reservation:
+            # the database only decrements if enough stock still exists.
+            result = db.execute(
+                update(Book)
+                .where(
+                    Book.id == book.id,
+                    Book.stock >= item.quantity,
+                )
+                .values(
+                    stock=Book.stock - item.quantity,
+                )
+            )
+
+            # Another concurrent order may have consumed stock after the
+            # initial check. A failed reservation aborts the whole order.
+            if result.rowcount != 1:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Insufficient stock for book {book.id}",
+                )
+
+            subtotal_cents += book.price_cents * item.quantity
+            total_quantity += item.quantity
+
+        discount_percent = calculate_discount_percent(
+            member,
+            total_quantity,
+        )
+
+        # Integer arithmetic gives the required floor behavior.
+        discount_cents = (
+            subtotal_cents * discount_percent
+        ) // 100
+
+        total_cents = subtotal_cents - discount_cents
+
+        # ------------------------------------------------------------------
+        # 6. Create the order with price snapshots
+        # ------------------------------------------------------------------
+        order = Order(
+            member_id=member.id,
+            status=OrderStatus.PENDING.value,
+            subtotal_cents=subtotal_cents,
+            discount_percent=discount_percent,
+            discount_cents=discount_cents,
+            total_cents=total_cents,
+            created_at=now,
+            items=[
+                OrderItem(
+                    book_id=item.book_id,
+                    quantity=item.quantity,
+                    unit_price_cents=books_by_id[item.book_id].price_cents,
+                )
+                for item in data.items
+            ],
+        )
+
+        db.add(order)
+
+        # Flush assigns order/item IDs before commit.
+        db.flush()
+
+        # One transaction covers:
+        # stock reservation + order creation + order items.
+        db.commit()
+        db.refresh(order)
+
+        return order
+
+    except Exception:
+        # Critical for all-or-nothing behavior.
+        #
+        # If any stock reservation succeeds but a later item fails,
+        # rollback restores all previous stock updates and prevents the
+        # order from being created.
+        db.rollback()
+        raise
+
+
+    # raise NotImplementedError("create_order")
+
 
 
 def get_order(db: Session, order_id: int) -> Order:
