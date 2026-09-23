@@ -233,10 +233,12 @@ def create_order(db: Session, data: OrderCreate, now: datetime) -> Order:
 
 def get_order(db: Session, order_id: int) -> Order:
     """Return an order by id, or raise 404."""
-    order = db.get(Order, order_id)
-    if order is None:
-        raise HTTPException(status_code=404, detail="Order not found")
-    return order
+    return _load_order(db, order_id)
+
+    # order = db.get(Order, order_id)
+    # if order is None:
+    #    raise HTTPException(status_code=404, detail="Order not found")
+    #return order
 
 
 def pay_order(db: Session, order_id: int) -> Order:
