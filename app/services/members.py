@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.models import Loan, Member, MemberTier, Order, OrderStatus
 from app.schemas import MemberCreate, MemberStats
 
+
 # Tiers from lowest to highest; a member's rank is their index in this list.
 TIER_ORDER: List[str] = [
     MemberTier.APPRENTICE.value,
@@ -102,7 +103,8 @@ def get_member(db: Session, member_id: int) -> Member:
 def list_member_orders(db: Session, member_id: int) -> List[Order]:
     """All orders of a member ordered by id ascending; 404 if the member is missing."""
     get_member(db, member_id)
-    return list(db.scalars(select(Order).where(Order.member_id == member_id).order_by(Order.id.asc))) # here i added .asc at the end
+    return list(db.scalars(select(Order).where(Order.member_id == member_id).order_by(Order.id.asc()))) # here i added .asc at the end
+
 
 
 def get_member_stats(db: Session, member_id: int, now: datetime) -> MemberStats:
@@ -115,4 +117,77 @@ def get_member_stats(db: Session, member_id: int, now: datetime) -> MemberStats:
     - overdue_loans counts unreturned loans with now > due_at.
     - late_fees_cents sums late fees of returned loans.
     """
-    raise NotImplementedError("get_member_stats")
+    paid_orders_count = (
+        select(func.count(Order.id))
+        .where(
+            Order.member_id == member_id,
+            Order.status == OrderStatus.PAID.value,
+        )
+        .scalar_subquery()
+    )
+
+    total_spent = (
+        select(func.coalesce(func.sum(Order.total_cents), 0))
+        .where(
+            Order.member_id == member_id,
+            Order.status == OrderStatus.PAID.value,
+        )
+        .scalar_subquery()
+    )
+
+    active_loans_count = (
+        select(func.count(Loan.id))
+        .where(
+            Loan.member_id == member_id,
+            Loan.returned_at.is_(None),
+        )
+        .scalar_subquery()
+    )
+
+    overdue_loans_count = (
+        select(func.count(Loan.id))
+        .where(
+            Loan.member_id == member_id,
+            Loan.returned_at.is_(None),
+            Loan.due_at < now,
+        )
+        .scalar_subquery()
+    )
+
+    late_fees = (
+        select(func.coalesce(func.sum(Loan.late_fee_cents), 0))
+        .where(
+            Loan.member_id == member_id,
+            Loan.returned_at.is_not(None),
+        )
+        .scalar_subquery()
+    )
+
+    # Everything is calculated in the database. We also select the
+    # member id itself, so a missing member can be distinguished from
+    # a real member having zero activity.
+    stmt = select(
+        Member.id.label("member_id"),
+        paid_orders_count.label("orders_paid"),
+        total_spent.label("total_spent_cents"),
+        active_loans_count.label("active_loans"),
+        overdue_loans_count.label("overdue_loans"),
+        late_fees.label("late_fees_cents"),
+    ).where(Member.id == member_id)
+
+    row = db.execute(stmt).one_or_none()
+
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Member not found",
+        )
+
+    return MemberStats(
+        member_id=row.member_id,
+        orders_paid=int(row.orders_paid or 0),
+        total_spent_cents=int(row.total_spent_cents or 0),
+        active_loans=int(row.active_loans or 0),
+        overdue_loans=int(row.overdue_loans or 0),
+        late_fees_cents=int(row.late_fees_cents or 0),
+    )
