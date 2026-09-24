@@ -196,7 +196,34 @@ class TestOrderValidation:
         restricted = make_book(restricted=True, stock=1)
         response = place_order(client, make_member()["id"], (restricted["id"], 5))
         assert response.status_code == 403
+    def test_restricted_item_blocks_entire_mixed_order(
+    self,
+    client,
+    make_member,
+    make_book,
+    ):
+     member = make_member(tier="apprentice")
 
+     public_book = make_book(stock=5)
+     restricted_book = make_book(
+        restricted=True,
+        stock=3,
+     )
+
+     response = place_order(
+        client,
+        member["id"],
+        (public_book["id"], 2),
+        (restricted_book["id"], 1),
+     )
+
+     assert response.status_code == 403
+
+     assert stock_of(client, public_book) == 5
+     assert stock_of(client, restricted_book) == 3
+     assert client.get(
+        f"/members/{member['id']}/orders"
+     ).json() == []
 
 class TestPayOrder:
     def test_pay_pending_order(self, client, make_member, make_book):
