@@ -328,4 +328,37 @@ def list_member_loans(
     db: Session, member_id: int, now: datetime, status: Optional[LoanStatus] = None
 ) -> List[LoanOut]:
     """A member's loans ordered by id, optionally filtered by computed status; 404 if member missing."""
-    raise NotImplementedError("list_member_loans")
+    member = db.get(Member, member_id)
+
+    if member is None:
+        raise HTTPException(status_code=404, detail="Member not found")
+
+    stmt = (
+        select(Loan)
+        .where(Loan.member_id == member_id)
+        .order_by(Loan.id.asc())
+    )
+
+    # Push status filtering into SQL rather than loading every loan and
+    # filtering everything in Python.
+
+    if status == "active":
+        stmt = stmt.where(
+            Loan.returned_at.is_(None),
+            Loan.due_at >= now,
+        )
+
+    elif status == "overdue":
+        stmt = stmt.where(
+            Loan.returned_at.is_(None),
+            Loan.due_at < now,
+        )
+
+    elif status == "returned":
+        stmt = stmt.where(
+            Loan.returned_at.is_not(None),
+        )
+
+    loans = db.scalars(stmt).all()
+
+    return [to_loan_out(loan, now) for loan in loans]
