@@ -284,14 +284,7 @@ def pay_order(db: Session, order_id: int) -> Order:
     except Exception:
         db.rollback()
         raise
-
-    # order = get_order(db, order_id)
-    # if order.status != OrderStatus.PENDING.value:
-    #     raise HTTPException(status_code=409, detail=f"Cannot pay an order that is {order.status}")
-    # order.status = OrderStatus.PAID.value
-    # db.commit()
-    # db.refresh(order)
-    # return order
+ 
 
 
 def cancel_order(db: Session, order_id: int) -> Order:
@@ -349,11 +342,3 @@ def cancel_order(db: Session, order_id: int) -> Order:
         db.rollback()
         raise
 
-
-    # order = get_order(db, order_id)
-    # if order.status != OrderStatus.PENDING.value:
-    #     raise HTTPException(status_code=409, detail=f"Cannot cancel an order that is {order.status}")
-    # order.status = OrderStatus.CANCELLED.value
-    # db.commit()
-    # db.refresh(order)
-    # return order
