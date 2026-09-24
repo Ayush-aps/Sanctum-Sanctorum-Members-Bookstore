@@ -189,6 +189,27 @@ class TestPatchBook:
         assert client.patch("/books/9999", json={"stock": 1}).status_code == 404
 
 
+    # this is necessary because It distinguishes: PATCH {} from PATCH {"stock": null}
+    @pytest.mark.parametrize(
+    "field",
+    ["title", "author", "price_cents", "stock", "restricted"],
+    )
+    def test_explicit_null_patch_returns_422_and_changes_nothing(
+    self,
+    client,
+    make_book,
+    field,
+    ):
+     book = make_book()
+     response = client.patch(
+        f"/books/{book['id']}",
+        json={field: None},
+     )
+
+     assert response.status_code == 422
+     assert client.get(f"/books/{book['id']}").json() == book
+
+
 class TestListBooks:
     def test_empty_store(self, client):
         response = client.get("/books")
@@ -336,3 +357,20 @@ class TestListBooks:
     @pytest.mark.parametrize("params", [{"limit": 0}, {"limit": 101}, {"offset": -1}])
     def test_out_of_range_pagination_returns_422(self, client, params):
         assert client.get("/books", params=params).status_code == 422
+
+    #That is worth testing because % and _ have special meanings in SQL LIKE.
+    def test_q_treats_sql_wildcards_as_literal_characters(
+    self,
+    client,
+    make_book,
+    ):
+     percent_book = make_book(title="100% Magic")
+     make_book(title="100X Magic")
+
+     response = client.get(
+        "/books",
+        params={"q": "%"},
+     )
+
+     assert response.status_code == 200
+     assert ids(response) == [percent_book["id"]]

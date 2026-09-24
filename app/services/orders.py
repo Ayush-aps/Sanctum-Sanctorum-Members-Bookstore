@@ -43,13 +43,17 @@ def calculate_discount_percent(member: Member, total_quantity: int) -> int:
 def _load_books(db: Session, book_ids: list[int]) -> Dict[int, Book]:
     """Load all requested books in one query and index them by id."""
 
+    ordered_book_ids = sorted(book_ids)
+
     books = db.scalars(
         select(Book)
-        .where(Book.id.in_(book_ids))
+        .where(Book.id.in_(ordered_book_ids))
+        .order_by(Book.id.asc())
         .with_for_update()
     ).all()
 
     return {book.id: book for book in books}
+
 
 
 def _load_order(db: Session, order_id: int) -> Order:
