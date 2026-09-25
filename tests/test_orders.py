@@ -196,6 +196,8 @@ class TestOrderValidation:
         restricted = make_book(restricted=True, stock=1)
         response = place_order(client, make_member()["id"], (restricted["id"], 5))
         assert response.status_code == 403
+
+    # Below test check -> Did getting 403 leave the database exactly as it was?    
     def test_restricted_item_blocks_entire_mixed_order(
     self,
     client,
