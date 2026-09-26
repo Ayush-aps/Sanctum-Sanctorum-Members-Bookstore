@@ -95,7 +95,7 @@ class Loan(Base):
     member_id: Mapped[int] = mapped_column(ForeignKey("members.id"), index=True)
     book_id: Mapped[int] = mapped_column(ForeignKey("books.id"), index=True)
     borrowed_at: Mapped[datetime] = mapped_column(DateTime)
-    # TODO: the loan model is incomplete. Still missing (see SPEC.md, "Loans"):
+    
     #   - due_at: when the book must be back (borrowed_at + 14 days)
     due_at: Mapped[datetime] = mapped_column(DateTime)
 

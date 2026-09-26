@@ -79,7 +79,8 @@ def create_loan(db: Session, data: LoanCreate, now: datetime) -> LoanOut:
     On success: borrowed_at = now, due_at = now + 14 days, returned_at None,
     late_fee_cents 0, and stock is decremented by one.
     """
-     # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
     # 1. Required existence checks, in the exact order from the spec.
     # ------------------------------------------------------------------
 
@@ -270,7 +271,7 @@ def return_loan(db: Session, loan_id: int, now: datetime) -> LoanOut:
     Rules: 404 if missing; 409 if already returned. Sets returned_at = now, restores one copy
     of stock and charges a late fee (see ``calculate_late_fee``).
     """
-     # Fetch loan + current book price together.
+    # Fetch loan + current book price together.
     # The current book price is deliberately used for the late-fee cap.
     row = db.execute(
         select(Loan, Book)

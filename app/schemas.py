@@ -28,8 +28,6 @@ def normalize_isbn13(raw: str) -> str:
     isbn = raw.replace("-", "").replace(" ", "")
     if len(isbn) != 13 or not isbn.isdigit():
         raise ValueError("isbn must contain exactly 13 digits")
-    # TODO: verify the ISBN-13 check digit (see SPEC.md)
-
     total = sum(
         int(digit) * (1 if index % 2 == 0 else 3)
         for index, digit in enumerate(isbn[:12])
@@ -155,7 +153,6 @@ class OrderItemIn(BaseModel):
 
 class OrderCreate(BaseModel):
     member_id: int
-    # TODO: reject an empty items list and the same book_id appearing twice (both 422)
     items: List[OrderItemIn] = Field(min_length=1)
     @model_validator(mode="after")
     def validate_items(self) -> "OrderCreate":

@@ -2,7 +2,8 @@
 from typing import Optional
 
 from fastapi import HTTPException
-from sqlalchemy import func, or_,select
+from sqlalchemy import func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models import Book
@@ -14,10 +15,11 @@ def create_book(db: Session, data: BookCreate) -> Book:
 
     Rules: the (already normalized) ISBN must be unique -> 409 otherwise.
     """
-    # TODO: reject a duplicate ISBN with 409
 
     existing_book = db.scalar(
-        select(Book).where(Book.isbn == data.isbn)
+        select(Book.id)
+        .where(Book.isbn == data.isbn)
+        .limit(1)
     )
 
     if existing_book is not None:
@@ -28,7 +30,29 @@ def create_book(db: Session, data: BookCreate) -> Book:
 
     book = Book(**data.model_dump())
     db.add(book)
-    db.commit()
+
+    try:
+        db.commit()
+    except IntegrityError:
+        # The UNIQUE constraint is the final protection against
+        # two concurrent requests creating the same ISBN.
+        db.rollback()
+
+        conflicting_book = db.scalar(
+            select(Book.id)
+            .where(Book.isbn == data.isbn)
+            .limit(1)
+        )
+
+        if conflicting_book is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="A book with this ISBN already exists",
+            )
+
+        # Do not hide unrelated database integrity errors (e.g. NOT NULL / FK violations).
+        raise
+
     db.refresh(book)
     return book
 
@@ -62,8 +86,6 @@ def update_book(db: Session, book_id: int, data: BookUpdate) -> Book:
 
     return book
 
-    # raise NotImplementedError("update_book") -- i excluded it
-
 
 def list_books(
     db: Session,
@@ -94,7 +116,6 @@ def list_books(
     if restricted is not None:
         query = query.where(Book.restricted == restricted)
 
-    # TODO: min_price / max_price filters
     # Inclusive minimum price.
     if min_price is not None:
         query = query.where(Book.price_cents >= min_price)
@@ -108,7 +129,6 @@ def list_books(
         select(func.count()).select_from(query.subquery())
     ) or 0
 
-    # TODO: apply ``sort``
 
     if sort is None:
         ordered_query = query.order_by(Book.id.asc())
@@ -149,8 +169,5 @@ def list_books(
         .limit(limit)
         .offset(offset)
     ).all()
-
-    #books = db.scalars(query.order_by(Book.id.asc()).limit(limit).offset(offset)).all()
-    #total = len(books)
 
     return BookPage(items=books, total=total, limit=limit, offset=offset)

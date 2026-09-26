@@ -43,7 +43,6 @@ def get_book(book_id: int, db: Session = Depends(get_db)):
     return service.get_book(db, book_id)
 
 
-# TODO: expose PATCH /books/{book_id} (see SPEC.md)
 @router.patch("/{book_id}", response_model=BookOut)
 def update_book(
     book_id: int,

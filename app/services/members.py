@@ -41,8 +41,6 @@ def create_member(db: Session, data: MemberCreate, now: datetime) -> Member:
 
     Rules: email (already stripped + lowercased) must be unique -> 409; created_at = now.
     """
-    # TODO: reject an email that is already in use with 409
-
 
     # The schema normalizes email, but keeping the comparison
     # case-insensitive here protects the business rule even when

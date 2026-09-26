@@ -36,8 +36,6 @@ def calculate_discount_percent(member: Member, total_quantity: int) -> int:
 
     return tier_discount + bulk_discount
 
-    # raise NotImplementedError("calculate_discount_percent")
-
 
 # both below functions are small private helper functions to improve the architecture and avoid duplicated database/query logic.
 def _load_books(db: Session, book_ids: list[int]) -> Dict[int, Book]:
@@ -85,64 +83,53 @@ def create_order(db: Session, data: OrderCreate, now: datetime) -> Order:
     Then stock is decremented for every item and prices are snapshotted.
     Pricing: discount_cents = subtotal * percent // 100; total = subtotal - discount.
     """
-    # TODO:
-    # 1. Load the member (404) and every book (404).
-    # 2. If any book is restricted, check the member's tier (403).
-    # 3. Check stock for every item before changing anything (409).
-    # 4. Decrement stock and build OrderItems with the current price as unit_price_cents.
-    # 5. Compute subtotal, discount_percent (calculate_discount_percent), discount_cents, total.
-    # 6. Save the pending Order with created_at = now and return it.
 
-    """Validation handled by the schema:
-    - items must not be empty
-    - every quantity must be >= 1
-    - a book may appear only once
-    - Stock reservation is all-or-nothing."""
+    # ------------------------------------------------------------------
+    # 1. Load member
+    # ------------------------------------------------------------------
+    member = db.get(Member, data.member_id)
 
-    try:
-        # ------------------------------------------------------------------
-        # 1. Load member
-        # ------------------------------------------------------------------
-        member = db.get(Member, data.member_id)
+    if member is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Member not found",
+        )
 
-        if member is None:
+    # ------------------------------------------------------------------
+    # 2. Load every requested book in one query
+    # ------------------------------------------------------------------
+    book_ids = [item.book_id for item in data.items]
+    books_by_id = _load_books(db, book_ids)
+
+    # Check missing books before any restricted/stock checks.
+    for book_id in book_ids:
+        if book_id not in books_by_id:
             raise HTTPException(
                 status_code=404,
-                detail="Member not found",
+                detail=f"Book {book_id} not found",
             )
 
-        # ------------------------------------------------------------------
-        # 2. Load every requested book in one query
-        # ------------------------------------------------------------------
-        book_ids = [item.book_id for item in data.items]
-        books_by_id = _load_books(db, book_ids)
+    # ------------------------------------------------------------------
+    # 3. Restricted-book access check
+    # ------------------------------------------------------------------
+    if any(book.restricted for book in books_by_id.values()):
+        ensure_can_access_restricted(member)
 
-        # Check missing books before any restricted/stock checks.
-        for book_id in book_ids:
-            if book_id not in books_by_id:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Book {book_id} not found",
-                )
+    # ------------------------------------------------------------------
+    # 4. Check stock for every item BEFORE changing anything
+    # ------------------------------------------------------------------
+    for item in data.items:
+        book = books_by_id[item.book_id]
 
-        # ------------------------------------------------------------------
-        # 3. Restricted-book access check
-        # ------------------------------------------------------------------
-        if any(book.restricted for book in books_by_id.values()):
-            ensure_can_access_restricted(member)
+        if book.stock < item.quantity:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Insufficient stock for book {book.id}",
+            )    
 
-        # ------------------------------------------------------------------
-        # 4. Check stock for every item BEFORE changing anything
-        # ------------------------------------------------------------------
-        for item in data.items:
-            book = books_by_id[item.book_id]
 
-            if book.stock < item.quantity:
-                raise HTTPException(
-                    status_code=409,
-                    detail=f"Insufficient stock for book {book.id}",
-                )
 
+    try:
         # ------------------------------------------------------------------
         # 5. Reserve stock atomically and calculate pricing
         # ------------------------------------------------------------------
@@ -231,8 +218,6 @@ def create_order(db: Session, data: OrderCreate, now: datetime) -> Order:
         raise
 
 
-    # raise NotImplementedError("create_order")
-
 
 
 def get_order(db: Session, order_id: int) -> Order:
@@ -250,35 +235,34 @@ def pay_order(db: Session, order_id: int) -> Order:
     Non-pending order -> 409
     Reserved stock remains unchanged.
     """
+    # Conditional update prevents an already-paid/cancelled order
+    # from being transitioned again.
+    result = db.execute(
+        update(Order)
+        .where(
+            Order.id == order_id,
+            Order.status == OrderStatus.PENDING.value,
+        )
+        .values(
+            status=OrderStatus.PAID.value,
+        )
+    )
 
-    try:
-        # Conditional update prevents an already-paid/cancelled order
-        # from being transitioned again.
-        result = db.execute(
-            update(Order)
-            .where(
-                Order.id == order_id,
-                Order.status == OrderStatus.PENDING.value,
+    if result.rowcount == 0:
+        existing = db.get(Order, order_id)
+
+        if existing is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Order not found",
             )
-            .values(
-                status=OrderStatus.PAID.value,
-            )
+
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot pay an order that is {existing.status}",
         )
 
-        if result.rowcount == 0:
-            existing = db.get(Order, order_id)
-
-            if existing is None:
-                raise HTTPException(
-                    status_code=404,
-                    detail="Order not found",
-                )
-
-            raise HTTPException(
-                status_code=409,
-                detail=f"Cannot pay an order that is {existing.status}",
-            )
-
+    try:
         order = _load_order(db, order_id)
 
         db.commit()
@@ -297,34 +281,33 @@ def cancel_order(db: Session, order_id: int) -> Order:
     Non-pending order -> 409
     Pending order -> cancelled + reserved stock restored.
     """
+    # Change the status only if the order is still pending.
+    result = db.execute(
+        update(Order)
+        .where(
+            Order.id == order_id,
+            Order.status == OrderStatus.PENDING.value,
+        )
+        .values(
+            status=OrderStatus.CANCELLED.value,
+        )
+    )
 
-    try:
-        # Change the status only if the order is still pending.
-        result = db.execute(
-            update(Order)
-            .where(
-                Order.id == order_id,
-                Order.status == OrderStatus.PENDING.value,
+    if result.rowcount == 0:
+        existing = db.get(Order, order_id)
+
+        if existing is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Order not found",
             )
-            .values(
-                status=OrderStatus.CANCELLED.value,
-            )
+
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot cancel an order that is {existing.status}",
         )
 
-        if result.rowcount == 0:
-            existing = db.get(Order, order_id)
-
-            if existing is None:
-                raise HTTPException(
-                    status_code=404,
-                    detail="Order not found",
-                )
-
-            raise HTTPException(
-                status_code=409,
-                detail=f"Cannot cancel an order that is {existing.status}",
-            )
-
+    try:
         # Load the items for restoring the exact reserved quantities.
         order = _load_order(db, order_id)
 
