@@ -2,14 +2,16 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
+from sqlalchemy import text
+from sqlalchemy.orm import Session
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 import app.models  # noqa: F401  (registers tables on Base.metadata)
 from app.clock import get_now
-from app.db import Base, SessionLocal, engine
+from app.db import Base, SessionLocal, engine, get_db
 from app.routers import books, loans, members, orders, reports
 from app.schemas import HealthOut
 from app.seed import seed_if_empty
@@ -45,7 +47,9 @@ def create_app(init_db: bool = True) -> FastAPI:
     application.add_exception_handler(NotImplementedError, not_implemented_handler)
 
     @application.get("/health", response_model=HealthOut, tags=["health"])
-    def health():
+    def health(db: Session = Depends(get_db)):
+        # Execute a fast SQL query to reset Supabase's inactivity timer
+        db.execute(text("SELECT 1"))
         return {"status": "ok"}
 
     application.include_router(books.router)
