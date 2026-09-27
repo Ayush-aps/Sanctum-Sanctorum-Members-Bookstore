@@ -20,8 +20,6 @@ they're confirmed, not guessed:
 Two of the seeded books are `restricted: true` ("Darkhold" and "Principles of Celestial
 Mechanics"), which is what makes tier-gating actually visible in the UI.
 
-Render's free tier spins down when idle, so the first request after a period of inactivity can
-take 30–60 seconds to respond — that's expected, not a bug.
 
 ## What I finished
 
